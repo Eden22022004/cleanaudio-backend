@@ -73,34 +73,83 @@ app.post("/api/clean", upload.single("audio"), async (req, res) => {
 
     const filters = getFiltersByPreset(preset);
 
-    ffmpeg(inputPath)
-      .audioFilters(filters)
-      .outputOptions(["-ar 44100", "-ac 1"])
-      .toFormat("wav")
-      .on("end", () => {
-        console.log("✅ Очищений файл:", outputPath);
+    // 1) Чекаємо, поки ffmpeg доробить файл
+    await new Promise((resolve, reject) => {
+      ffmpeg(inputPath)
+        .audioFilters(filters)
+        .outputOptions(["-ar 44100", "-ac 1"])
+        .toFormat("wav")
+        .on("end", () => {
+          console.log("✅ FFmpeg завершив обробку:", outputPath);
+          resolve();
+        })
+        .on("error", (err) => {
+          console.error("❌ FFmpeg помилка:", err);
+          reject(err);
+        })
+        .save(outputPath);
+    });
 
-        return res.json({
-          cleanedFile: `uploads/${outputFileName}`,
-          preset
-        });
-      })
-      .on("error", (err) => {
-        console.error("❌ FFmpeg помилка:", err);
-        return res.status(500).json({
-          error: "Помилка FFmpeg",
-          details: err.message
-        });
-      })
-      .save(outputPath);
+    // 2) Читаємо файл у буфер
+    const fileBuffer = fs.readFileSync(outputPath);
+
+    // 3) Формуємо шлях у бакеті
+    const bucketName = "cleaned-audio"; // твій bucket
+    const fileNameInBucket = `cleaned/${outputFileName}`;
+
+    // 4) Завантажуємо в Supabase Storage
+    const { data: uploadData, error: uploadError } = await supabase.storage
+      .from(bucketName)
+      .upload(fileNameInBucket, fileBuffer, {
+        contentType: "audio/wav",
+        upsert: false, // якщо хочеш дозволити перезапис — постав true
+      });
+
+    if (uploadError) {
+      console.error("❌ Помилка завантаження в Supabase Storage:", uploadError);
+      return res.status(500).json({
+        error: "Помилка завантаження в сховище",
+        details: uploadError.message,
+      });
+    }
+
+    // 5) Отримуємо public URL
+    const { data: publicUrlData } = supabase.storage
+      .from(bucketName)
+      .getPublicUrl(fileNameInBucket);
+
+    const publicUrl = publicUrlData?.publicUrl;
+
+    console.log("🌐 Public URL:", publicUrl);
+
+    if (!publicUrl) {
+      return res.status(500).json({
+        error: "Не вдалося отримати публічний URL",
+      });
+    }
+
+    // (опціонально) можемо видалити локальний файл
+    try {
+      fs.unlinkSync(outputPath);
+      fs.unlinkSync(inputPath);
+    } catch (e) {
+      console.warn("⚠ Не вдалося видалити тимчасові файли:", e.message);
+    }
+
+    // 6) Віддаємо вже готовий public URL фронту
+    return res.json({
+      cleanedFile: publicUrl,
+      preset,
+    });
   } catch (err) {
-    console.error("❌ Помилка:", err);
+    console.error("❌ Помилка /api/clean:", err);
     return res.status(500).json({
       error: "Помилка обробки аудіо",
-      details: err.message
+      details: err.message,
     });
   }
 });
+
 
 // 🧪 Тестова сторінка (тимчасово, для дебагу)
 app.get("/", (req, res) => {
