@@ -8,9 +8,19 @@ import ffmpeg from "fluent-ffmpeg";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import { createClient } from "@supabase/supabase-js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+if (!supabaseUrl || !supabaseServiceRoleKey) {
+  console.warn("⚠ SUPABASE_URL або SUPABASE_SERVICE_ROLE_KEY не задані в env");
+}
+
+const supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
 
 const app = express();
 app.use(cors());
